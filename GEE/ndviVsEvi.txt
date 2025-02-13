@@ -1,0 +1,100 @@
+
+// Reading the uploaded shapefile for area of interest
+var geometry = ee.FeatureCollection('projects/rmtumon/assets/study_area')
+    .geometry();
+Map.centerObject(geometry);
+
+// Useing Sentinel-2 collection with improved filtering
+var sen = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+    .filterBounds(geometry)
+    .filterDate('2016','2025')
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))  // Increased threshold slightly for more data
+    .map(function(img) {
+        // Better band processing
+        var bands = img.select(['B2','B3','B4','B8','B11','B12']).multiply(0.0001);
+        
+        // Calculating NDVI
+        var ndvi = bands.normalizedDifference(['B8','B4']).rename('ndvi');
+        
+        // Calculating EVI for comparison
+        var evi = bands.expression(
+            '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+                'NIR': bands.select('B8'),
+                'RED': bands.select('B4'),
+                'BLUE': bands.select('B2')
+            }).rename('evi');
+            
+        return img.addBands(ndvi).addBands(evi)
+            .copyProperties(img, ['system:time_start', 'system:time_end']);
+    });
+
+// Creating time series chart with improved styling
+var timeSeriesChart = ui.Chart.image.series({
+    imageCollection: sen.select(['ndvi', 'evi']),
+    region: geometry,
+    reducer: ee.Reducer.median(),
+    scale: 30
+}).setOptions({
+    title: 'Vegetation Indices Time Series',
+    vAxis: {title: 'Index Value'},
+    hAxis: {title: 'Date'},
+    series: {
+        0: {color: '2ecc71'},
+        1: {color: 'e67e22'}
+    }
+});
+
+print(timeSeriesChart);
+
+// // Comparing before and after periods with better visualization
+// var before = sen.filterDate('2016','2017').median();
+// var mid = sen.filterDate('2018','2019').median();
+// var after = sen.filterDate('2020', '2025').median();
+
+// // Visualization parameters
+// var visParams = {
+//     bands: ['B4', 'B3', 'B2'],
+//     min: 0,
+//     max: 0.3,
+//     gamma: 1.4
+// };
+
+// var ndviParams = {
+//     bands: ['ndvi'],
+//     min: -0.2,
+//     max: 0.8,
+//     palette: ['red', 'yellow', 'green']
+// };
+
+// // Adding layers to map
+// // Map.addLayer(before.clip(geometry), visParams, 'Before (2016-2017)', false);
+// // Map.addLayer(mid.clip(geometry), visParams, 'Mid (2018-2019)', false);
+// // Map.addLayer(after.clip(geometry), visParams, 'After (2020-2025)', false);
+// Map.addLayer(before.select('ndvi').clip(geometry), ndviParams, 'NDVI Before', false);
+// Map.addLayer(mid.select('ndvi').clip(geometry), ndviParams, 'NDVI Mid', false);
+// Map.addLayer(after.select('ndvi').clip(geometry), ndviParams, 'NDVI After', false);
+
+// // Calculating forest change
+// var ndviThreshold = 0.5;
+// var beforeForest = before.select('ndvi').gt(ndviThreshold);
+// var afterForest = after.select('ndvi').gt(ndviThreshold);
+// var midForest = mid.select('ndvi').gt(ndviThreshold);
+// var forestLoss = beforeForest.subtract(midForest);
+
+// // Calculating areas
+// var areaImage = forestLoss.multiply(ee.Image.pixelArea());
+// var area = areaImage.reduceRegion({
+//     reducer: ee.Reducer.sum(),
+//     geometry: geometry,
+//     scale: 30,
+//     maxPixels: 1e9
+// });
+// print(area)
+// // Export results
+// Export.image.toDrive({
+//     image: forestLoss.clip(geometry),
+//     description: 'Forest_Change_2015_2024',
+//     scale: 30,
+//     region: geometry,
+//     maxPixels: 1e9
+// });

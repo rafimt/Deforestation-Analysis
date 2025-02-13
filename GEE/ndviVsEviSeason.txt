@@ -1,0 +1,105 @@
+// Reading the uploaded shapefile for area of interest
+var geometry = ee.FeatureCollection('projects/rmtumon/assets/study_area')
+    .geometry();
+Map.centerObject(geometry);
+
+// Function to add VI bands and season
+function addIndicesAndSeason(img) {
+    // Converting to float and scale
+    var bands = img.select(['B2','B3','B4','B8','B11','B12']).multiply(0.0001);
+    
+    // Calculating NDVI
+    var ndvi = bands.normalizedDifference(['B8','B4']).rename('ndvi');
+    
+    // Calculating EVI
+    var evi = bands.expression(
+        '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+            'NIR': bands.select('B8'),
+            'RED': bands.select('B4'),
+            'BLUE': bands.select('B2')
+        }).rename('evi');
+    
+    // Adding season based on month
+    var date = ee.Date(img.get('system:time_start'));
+    var month = date.get('month');
+    var season = ee.Algorithms.If(month.lte(6), 'wet', 'dry');
+    
+    return img.addBands(ndvi).addBands(evi)
+        .set('season', season)
+        .copyProperties(img, ['system:time_start', 'system:time_end']);
+}
+
+// Sentinel-2 collection
+var collection = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+    .filterBounds(geometry)
+    .filterDate('2016','2025')
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+    .map(addIndicesAndSeason);
+
+// Spliting by season
+var wetSeason = collection.filter(ee.Filter.eq('season', 'wet'));
+var drySeason = collection.filter(ee.Filter.eq('season', 'dry'));
+
+// Creating time series charts for wet season
+var wetSeasonChart = ui.Chart.image.series({
+    imageCollection: wetSeason.select(['ndvi', 'evi']),
+    region: geometry,
+    reducer: ee.Reducer.median(),
+    scale: 30
+}).setOptions({
+    title: 'Wet Season (Jan-Jun) Vegetation Indices Time Series',
+    vAxis: {title: 'Index Value', minValue: 0, maxValue: 1},
+    hAxis: {title: 'Date'},
+    series: {
+        0: {color: '2ecc71', lineWidth: 2, pointSize: 2, label: 'NDVI'},
+        1: {color: 'e67e22', lineWidth: 2, pointSize: 2, label: 'EVI'}
+    },
+    trendlines: {
+        0: {color: '27ae60', lineWidth: 1, opacity: 0.5},
+        1: {color: 'd35400', lineWidth: 1, opacity: 0.5}
+    }
+});
+
+// Creating time series charts for dry season
+var drySeasonChart = ui.Chart.image.series({
+    imageCollection: drySeason.select(['ndvi', 'evi']),
+    region: geometry,
+    reducer: ee.Reducer.median(),
+    scale: 30
+}).setOptions({
+    title: 'Dry Season (Jul-Dec) Vegetation Indices Time Series',
+    vAxis: {title: 'Index Value', minValue: 0, maxValue: 1},
+    hAxis: {title: 'Date'},
+    series: {
+        0: {color: '2ecc71', lineWidth: 2, pointSize: 2, label: 'NDVI'},
+        1: {color: 'e67e22', lineWidth: 2, pointSize: 2, label: 'EVI'}
+    },
+    trendlines: {
+        0: {color: '27ae60', lineWidth: 1, opacity: 0.5},
+        1: {color: 'd35400', lineWidth: 1, opacity: 0.5}
+    }
+});
+
+// Printing the charts
+print(wetSeasonChart);
+print(drySeasonChart);
+
+
+
+// Calculate and display seasonal means
+// var wetNDVIMean = wetSeason.select('ndvi').mean();
+// var wetEVIMean = wetSeason.select('evi').mean();
+// var dryNDVIMean = drySeason.select('ndvi').mean();
+// var dryEVIMean = drySeason.select('evi').mean();
+
+// // Add layers to map
+// Map.addLayer(wetNDVIMean.clip(geometry), {min: 0, max: 1, palette: ['red', 'yellow', 'green']}, 'Wet Season NDVI Mean');
+// Map.addLayer(wetEVIMean.clip(geometry), {min: 0, max: 1, palette: ['red', 'yellow', 'green']}, 'Wet Season EVI Mean');
+// Map.addLayer(dryNDVIMean.clip(geometry), {min: 0, max: 1, palette: ['red', 'yellow', 'green']}, 'Dry Season NDVI Mean');
+// Map.addLayer(dryEVIMean.clip(geometry), {min: 0, max: 1, palette: ['red', 'yellow', 'green']}, 'Dry Season EVI Mean');
+// Map.addLayer(geometry, {color: 'black'}, 'Study Area Boundary');
+
+
+
+
+

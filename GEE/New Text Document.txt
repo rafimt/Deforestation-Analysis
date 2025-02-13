@@ -1,0 +1,156 @@
+
+
+// Importing collections and define region
+var s2 = ee.ImageCollection('COPERNICUS/S2_HARMONIZED');
+
+
+// Importing your study area - replace with your actual geometry import
+var geometry = ee.FeatureCollection('projects/rmtumon/assets/study_area').geometry();
+Map.centerObject(geometry);
+
+// Visualization parameters
+var rgbVis = {min: 0.0, max: 3000, bands: ['B4', 'B3', 'B2']};
+var palette = [
+  'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718',
+  '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+  '004C00', '023B01', '012E01', '011D01', '011301'
+];
+var vegetationVis = {min: -1, max: 1, palette: palette};
+
+// Function to compute NDVI
+function addNDVI(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  return image.addBands(ndvi);
+}
+
+// Function to compute EVI
+// EVI = 2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))
+function addEVI(image) {
+  var evi = image.expression(
+    '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+      'NIR': image.select('B8'),
+      'RED': image.select('B4'),
+      'BLUE': image.select('B2')
+    }).rename('EVI');
+  return image.addBands(evi);
+}
+
+// Function to mask clouds using the Sentinel-2 QA band
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);
+}
+
+// Function to process one year
+function processYear(year) {
+   var startDate = ee.Date.fromYMD(year, 1, 1);
+   var endDate = ee.Date.fromYMD(year, 7, 1);
+  
+  // Filtering collection
+  var filteredS2 = s2
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+    .filter(ee.Filter.date(startDate, endDate))
+    .filter(ee.Filter.bounds(geometry))
+    .map(maskS2clouds);
+  
+  // Adding vegetation indices
+  var withIndices = filteredS2
+    .map(addNDVI)
+    .map(addEVI);
+  
+  // Creating annual composite
+  var composite = withIndices.median();
+  
+  // Cliping to study area
+  var ndviComposite = composite.select('NDVI').clip(geometry);
+  var eviComposite = composite.select('EVI').clip(geometry);
+  
+  // Adding layers to map
+  Map.addLayer(ndviComposite, vegetationVis, 'NDVI ' + year);
+  Map.addLayer(eviComposite, vegetationVis, 'EVI ' + year);
+  
+  // Exporting NDVI
+  Export.image.toDrive({
+    image: ndviComposite,
+    description: 'NDVI_' + year,
+    scale: 10,
+    region: geometry,
+    fileFormat: 'GeoTIFF',
+    folder: 'vegetation_indices',
+    fileNamePrefix: 'NDVI_' + year,
+    maxPixels: 1e13
+  });
+  
+  // Exporting EVI
+  Export.image.toDrive({
+    image: eviComposite,
+    description: 'EVI_' + year,
+    scale: 10,
+    region: geometry,
+    fileFormat: 'GeoTIFF',
+    folder: 'vegetation_indices',
+    fileNamePrefix: 'EVI_' + year,
+    maxPixels: 1e13
+  });
+  
+  return ee.Dictionary({
+    'NDVI': ndviComposite,
+    'EVI': eviComposite
+  });
+}
+
+// Processing all years
+var startYear = 2016;
+var endYear = 2025;
+for (var year = startYear; year <= endYear; year++) {
+  processYear(year);
+}
+
+// Add a legend
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitle = ui.Label({
+  value: 'Vegetation Indices',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+legend.add(legendTitle);
+
+var makeRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: '#' + color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+var palette = ['004C00', '207401', '99B718', 'FCD163', 'FFFFFF'];
+var names = ['High', 'Moderate-High', 'Moderate', 'Low', 'No Vegetation'];
+for (var i = 0; i < palette.length; i++) {
+  legend.add(makeRow(palette[i], names[i]));
+}
+
+Map.add(legend);
